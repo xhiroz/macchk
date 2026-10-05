@@ -6,9 +6,12 @@
 export LC_ALL=C
 # Solo binarios del sistema, que SIP protege: un PATH manipulado no puede colar comandos falsos.
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+# Configuración Z1ML00051: MacBook Pro 14" (A3426), M5 Pro de 18 núcleos, 64 GB, 1 TB, negro espacial.
 EXPECT_CHIP="M5 Pro"
+EXPECT_CORES=18
 EXPECT_MEM="64 GB"
 EXPECT_DISK_GB=1000
+EXPECT_PART="Z1ML00051"
 
 R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; B=$'\033[1m'; N=$'\033[0m'
 fails=0; warns=0
@@ -36,8 +39,13 @@ lock=$(get "$hw" SPHardwareDataType.0.activation_lock_status)
 [[ $chip == *"$EXPECT_CHIP"* ]] && ok "Chip: $chip" || bad "Chip: $chip (esperado $EXPECT_CHIP)"
 [[ $mem == "$EXPECT_MEM" ]] && ok "Memoria: $mem" || bad "Memoria: $mem (esperado $EXPECT_MEM)"
 [[ $lock == "activation_lock_disabled" ]] && ok "Bloqueo de activación: desactivado" || bad "Bloqueo de activación: $lock"
-cores=${cores#proc }
-printf "   Núcleos: %s (compáralo con la ficha de apple.com)\n" "${cores%%:*}"
+cores=${cores#proc }; cores=${cores%%:*}
+if [[ $cores == "$EXPECT_CORES" ]]; then ok "Núcleos de CPU: $cores"
+elif [[ $cores =~ ^[0-9]+$ ]]; then bad "Núcleos de CPU: $cores (esperado $EXPECT_CORES: es un chip inferior o distinto)"
+else warn "No se pudieron leer los núcleos de CPU"; fi
+# Aviso y no fallo: lo que manda es chip, memoria y disco; la referencia se compara además con la etiqueta.
+[[ $model == "$EXPECT_PART"* ]] && ok "Referencia: $model" \
+  || warn "Referencia: ${model:-desconocida} (la de la etiqueta es $EXPECT_PART)"
 printf "   macOS: %s\n" "$(sw_vers -productVersion)"
 
 title "Disco"
