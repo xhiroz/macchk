@@ -63,14 +63,14 @@ for i in 0 1 2 3 4 5; do
 done
 cap=${cap//[^0-9]/}
 if [[ -z $cycles ]]; then bad "No se pudo leer la batería"
-elif (( cycles <= 10 )); then ok "Ciclos de batería: $cycles"
-elif (( cycles <= 25 )); then warn "Ciclos de batería: $cycles (algo alto para un Mac nuevo)"
+elif (( cycles <= 5 )); then ok "Ciclos de batería: $cycles"
+elif (( cycles <= 10 )); then warn "Ciclos de batería: $cycles (alto para un Mac precintado: lo normal es de 0 a 5)"
 else bad "Ciclos de batería: $cycles (no es nuevo)"; fi
 [[ $health == "Good" ]] && ok "Estado de la batería: normal" || bad "Estado de la batería: ${health:-desconocido}"
-# Una batería nueva puede marcar 98-99 % por calibración; los ciclos son la señal fiable de uso.
+# Un Mac precintado debe marcar 100 %. 98-99 % puede ser calibración, así que avisa en vez de fallar: decide con los ciclos.
 if [[ -z $cap ]]; then bad "No se pudo leer la capacidad máxima de la batería"
-elif (( cap >= 98 )); then ok "Capacidad máxima: $cap %"
-elif (( cap >= 95 )); then warn "Capacidad máxima: $cap % (algo baja para un Mac nuevo)"
+elif (( cap >= 100 )); then ok "Capacidad máxima: 100 %"
+elif (( cap >= 98 )); then warn "Capacidad máxima: $cap % (un Mac nuevo debería marcar 100 %: mira los ciclos)"
 else bad "Capacidad máxima: $cap % (no es una batería nueva)"; fi
 if [[ $connected == "TRUE" || $connected == "true" ]]; then
   ok "Cargador conectado: ${watts:-?} W$([[ $charging == TRUE || $charging == true ]] && echo ', cargando')"
