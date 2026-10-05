@@ -67,7 +67,11 @@ elif (( cycles <= 10 )); then ok "Ciclos de batería: $cycles"
 elif (( cycles <= 25 )); then warn "Ciclos de batería: $cycles (algo alto para un Mac nuevo)"
 else bad "Ciclos de batería: $cycles (no es nuevo)"; fi
 [[ $health == "Good" ]] && ok "Estado de la batería: normal" || bad "Estado de la batería: ${health:-desconocido}"
-[[ $cap == 100 ]] && ok "Capacidad máxima: 100 %" || bad "Capacidad máxima: ${cap:-?} % (nueva debe ser 100 %)"
+# Una batería nueva puede marcar 98-99 % por calibración; los ciclos son la señal fiable de uso.
+if [[ -z $cap ]]; then bad "No se pudo leer la capacidad máxima de la batería"
+elif (( cap >= 98 )); then ok "Capacidad máxima: $cap %"
+elif (( cap >= 95 )); then warn "Capacidad máxima: $cap % (algo baja para un Mac nuevo)"
+else bad "Capacidad máxima: $cap % (no es una batería nueva)"; fi
 if [[ $connected == "TRUE" || $connected == "true" ]]; then
   ok "Cargador conectado: ${watts:-?} W$([[ $charging == TRUE || $charging == true ]] && echo ', cargando')"
 else
@@ -123,9 +127,11 @@ fi
 if [[ $online == 2* || $online == 3* ]]; then
   blocked=""
   for h in deviceenrollment.apple.com mdmenrollment.apple.com iprofiles.apple.com; do
-    [[ $(curl -s -m 8 -o /dev/null -w '%{http_code}' "https://$h") == 000 ]] && blocked+="$h "
+    [[ $(curl -s -m 8 --retry 1 -o /dev/null -w '%{http_code}' "https://$h") == 000 ]] && blocked+="$h "
   done
-  [[ -z $blocked ]] && ok "Los servidores de inscripción de Apple responden" || bad "No se llega a los servidores de inscripción de Apple: $blocked"
+  # Aviso y no fallo: con la Wi-Fi del móvil puede fallar una conexión suelta. El bloqueo real lo delata el archivo hosts.
+  [[ -z $blocked ]] && ok "Los servidores de inscripción de Apple responden" \
+    || warn "No se llega a estos servidores de Apple (repite el script; si sigue igual, desconfía): $blocked"
 fi
 cfg=/var/db/ConfigurationProfiles/Settings
 if [[ -e $cfg/.cloudConfigHasActivationRecord || -e $cfg/.cloudConfigRecordFound ]]; then
