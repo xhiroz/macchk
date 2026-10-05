@@ -4,6 +4,8 @@
 #   curl -fsSL <url-de-este-script> | bash
 
 export LC_ALL=C
+# Solo binarios del sistema, que SIP protege: un PATH manipulado no puede colar comandos falsos.
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 EXPECT_CHIP="M5 Pro"
 EXPECT_MEM="64 GB"
 EXPECT_DISK_GB=1000
@@ -74,8 +76,16 @@ fi
 
 title "Empresa / gestión remota (MDM)"
 st=$(profiles status -type enrollment 2>&1)
-[[ $st == *"Enrolled via DEP: No"* ]] && ok "No inscrito por Apple Business Manager" || bad "Inscrito por Apple Business Manager (DEP)"
-[[ $st == *"MDM enrollment: No"* ]] && ok "Sin gestión remota (MDM)" || bad "Tiene gestión remota (MDM)"
+case $st in
+  *"Enrolled via DEP: Yes"*) bad "Inscrito por una empresa (Apple Business Manager)";;
+  *"Enrolled via DEP: No"*)  ok "No inscrito por Apple Business Manager";;
+  *) bad "No se pudo leer la inscripción en Apple Business Manager: ${st:-sin respuesta}";;
+esac
+case $st in
+  *"MDM enrollment: Yes"*) bad "Tiene gestión remota (MDM)"; grep "MDM server" <<<"$st" | sed 's/^/     /';;
+  *"MDM enrollment: No"*)  ok "Sin gestión remota (MDM)";;
+  *) bad "No se pudo leer el estado de la gestión remota (MDM)";;
+esac
 
 online=$(curl -s -m 8 -o /dev/null -w '%{http_code}' https://www.apple.com)
 printf "\n${B}Ahora te pedirá la contraseña de tu usuario (no se ve al escribirla).${N}\n"
@@ -84,19 +94,58 @@ if sudo -v; then
     dep=$(sudo profiles show -type enrollment 2>&1)
     if grep -qiE "OrganizationName|ConfigurationURL|IsSupervised" <<<"$dep"; then
       bad "Apple dice que es de una EMPRESA:"; grep -iE "OrganizationName|ConfigurationURL" <<<"$dep" | sed 's/^/     /'
+    elif grep -qi "not DEP enabled" <<<"$dep"; then
+      ok "Apple responde que no está asignado a ninguna empresa"
     else
-      ok "Apple no lo asigna a ninguna empresa"
+      # Cualquier otra respuesta (servidor no disponible, error...) no demuestra nada.
+      bad "Apple no ha confirmado que no sea de una empresa. Respuesta:"; head -3 <<<"$dep" | cut -c1-200 | sed 's/^/     /'
     fi
   else
     bad "Sin internet: no se pudo preguntar a Apple si es de una empresa"
   fi
   sp=$(sudo profiles list 2>&1)
-  grep -q profileIdentifier <<<"$sp" && bad "Hay perfiles de configuración instalados" || ok "Sin perfiles de configuración"
+  if grep -q profileIdentifier <<<"$sp"; then bad "Hay perfiles de configuración instalados"
+  elif grep -qi "no configuration profiles" <<<"$sp"; then ok "Sin perfiles de configuración"
+  else warn "No se pudo leer la lista de perfiles: $(head -1 <<<"$sp" | cut -c1-120)"; fi
 else
   bad "No se pudo usar sudo: faltan las comprobaciones con contraseña"
 fi
 
+title "Rastros de un bypass de gestión remota"
+# Los bypass de MDM bloquean los servidores de inscripción de Apple y dejan marcas falsas en el sistema.
+hosts=$(grep -vE '^[[:space:]]*(#|$)' /etc/hosts 2>/dev/null)
+if grep -qiE 'apple\.com|icloud|mzstatic|aaplimg' <<<"$hosts"; then
+  bad "El archivo hosts bloquea servidores de Apple:"; grep -iE 'apple\.com|icloud|mzstatic|aaplimg' <<<"$hosts" | sed 's/^/     /'
+else
+  extra=$(awk '!($2=="localhost" || $2=="broadcasthost")' <<<"$hosts")
+  [[ -z $extra ]] && ok "Archivo hosts de fábrica" || { warn "El archivo hosts tiene entradas añadidas:"; sed 's/^/     /' <<<"$extra"; }
+fi
+if [[ $online == 2* || $online == 3* ]]; then
+  blocked=""
+  for h in deviceenrollment.apple.com mdmenrollment.apple.com iprofiles.apple.com; do
+    [[ $(curl -s -m 8 -o /dev/null -w '%{http_code}' "https://$h") == 000 ]] && blocked+="$h "
+  done
+  [[ -z $blocked ]] && ok "Los servidores de inscripción de Apple responden" || bad "No se llega a los servidores de inscripción de Apple: $blocked"
+fi
+cfg=/var/db/ConfigurationProfiles/Settings
+if [[ -e $cfg/.cloudConfigHasActivationRecord || -e $cfg/.cloudConfigRecordFound ]]; then
+  bad "El sistema guarda un registro de inscripción de empresa"
+elif [[ -e $cfg/.cloudConfigProfileInstalled && $st != *"MDM enrollment: Yes"* ]]; then
+  bad "Marca de perfil de empresa instalado sin gestión activa: típico de un bypass"
+else
+  ok "Sin marcas de inscripción de empresa en el sistema"
+fi
+
 title "Seguridad del sistema"
+boot=$(system_profiler SPiBridgeDataType -json 2>/dev/null)
+sb=$(get "$boot" SPiBridgeDataType.0.ibridge_secure_boot)
+# system_profiler traduce este valor al idioma del sistema.
+case $sb in
+  "Full Security"|"Seguridad máxima") ok "Arranque seguro: $sb";;
+  "") warn "No se pudo leer la política de arranque seguro";;
+  *[Rr]educ*|*[Pp]ermis*) bad "Arranque seguro rebajado: $sb";;
+  *) warn "Arranque seguro: $sb (debería ser el nivel máximo)";;
+esac
 [[ $(csrutil status) == *"enabled."* ]] && ok "Protección de integridad (SIP): activa" || bad "SIP desactivado"
 [[ $(csrutil authenticated-root status) == *"enabled"* ]] && ok "Volumen de sistema sellado: activo" || bad "Volumen de sistema sin sellar"
 [[ $(spctl --status 2>&1) == *"assessments enabled"* ]] && ok "Gatekeeper: activo" || bad "Gatekeeper desactivado"
@@ -124,6 +173,12 @@ title "Señales de uso previo"
 now=$(date +%s)
 age=$(( (now - $(stat -f %B "$HOME")) / 3600 ))
 (( age < 12 )) && ok "Tu usuario se creó hace menos de 12 horas" || warn "Tu usuario se creó hace $age horas"
+setup=$(stat -f %B /var/db/.AppleSetupDone 2>/dev/null)
+if [[ -n $setup ]]; then
+  sage=$(( (now - setup) / 3600 ))
+  (( sage < 12 )) && ok "La configuración inicial se hizo hace menos de 12 horas" \
+    || warn "La configuración inicial se hizo hace $sage horas: ¿viste tú la pantalla de «Hola»?"
+fi
 wifi=$(networksetup -listallhardwareports | awk '/Wi-Fi|AirPort/{getline; print $2; exit}')
 nets=$(networksetup -listpreferredwirelessnetworks "${wifi:-en0}" 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
 n=$(grep -c . <<<"$nets")
